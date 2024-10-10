@@ -32,8 +32,7 @@
     let isCallInProgress = false;
     let isMuted = false;
 
-    // const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
-    const signalingServerUrl = 'ws://127.0.0.1:8080/signal';
+    const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -58,7 +57,15 @@
             const peerId = data.peerId; // Correct peerId from the message
             console.log("Using peerId: " + peerId);
 
+            // If we receive an SDP message, check if we have a peer connection for that peerId
             if (data.sdp) {
+                if (!peerConnections[peerId]) {
+                    // If we don't have a connection for this peer, create it
+                    console.log(`Creating new peer connection for peerId: ${peerId}`);
+                    peerConnections[peerId] = new RTCPeerConnection(configuration);
+                    setupPeerConnection(peerId);
+                }
+
                 console.log("Received SDP:", data.sdp);
                 await peerConnections[peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
 
@@ -73,9 +80,13 @@
                     console.log("Sent answer to the signaling server.");
                 }
             } else if (data.candidate) {
-                console.log("Received ICE candidate:", data.candidate);
-                await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
-                console.log("Added ICE candidate to peer connection.");
+                if (peerConnections[peerId]) {
+                    console.log("Received ICE candidate:", data.candidate);
+                    await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
+                    console.log("Added ICE candidate to peer connection.");
+                } else {
+                    console.warn(`No peer connection found for peerId: ${peerId}`);
+                }
             }
         };
     }
@@ -113,37 +124,13 @@
             // Create a peer connection for the current local peer
             const peerId = Math.random().toString(36).substring(2);  // Generate a random peerId
             peerConnections[peerId] = new RTCPeerConnection(configuration);
-            console.log("Created new RTCPeerConnection for peerId:", peerId);
+            setupPeerConnection(peerId);
 
             // Add the local audio stream to the peer connection
             localStream.getTracks().forEach(track => {
                 peerConnections[peerId].addTrack(track, localStream);
             });
             console.log("Added local audio tracks to the peer connection.");
-
-            // Set up ICE candidate handling
-            peerConnections[peerId].onicecandidate = (event) => {
-                if (event.candidate) {
-                    signalingSocket.send(JSON.stringify({
-                        candidate: event.candidate,
-                        peerId: peerId
-                    }));
-                    console.log("Sent ICE candidate to signaling server:", event.candidate);
-                }
-            };
-
-            // Handle remote audio stream for other participants
-            peerConnections[peerId].ontrack = (event) => {
-                const remoteStream = event.streams[0];
-                console.log("Received remote stream from another participant.");
-
-                const remoteAudio = document.createElement('audio');
-                remoteAudio.controls = true;
-                remoteAudio.autoplay = true;
-                remoteAudio.srcObject = remoteStream;
-                remoteAudioContainer.appendChild(remoteAudio);
-                console.log("Added remote audio element to the container.");
-            };
 
             // Create SDP offer and send to the server
             console.log("Creating SDP offer.");
@@ -157,6 +144,33 @@
         } catch (error) {
             console.error("Error starting the call:", error);
         }
+    }
+
+    // Function to handle new peer connection
+    function setupPeerConnection(peerId) {
+        // Add ICE candidate handling
+        peerConnections[peerId].onicecandidate = (event) => {
+            if (event.candidate) {
+                signalingSocket.send(JSON.stringify({
+                    candidate: event.candidate,
+                    peerId: peerId
+                }));
+                console.log("Sent ICE candidate to signaling server:", event.candidate);
+            }
+        };
+
+        // Handle remote audio stream for other participants
+        peerConnections[peerId].ontrack = (event) => {
+            const remoteStream = event.streams[0];
+            console.log("Received remote stream from another participant.");
+
+            const remoteAudio = document.createElement('audio');
+            remoteAudio.controls = true;
+            remoteAudio.autoplay = true;
+            remoteAudio.srcObject = remoteStream;
+            remoteAudioContainer.appendChild(remoteAudio);
+            console.log("Added remote audio element to the container.");
+        };
     }
 
     // Function to mute/unmute audio
@@ -174,15 +188,17 @@
 
     // Function to end the call
     function endCall() {
-        const peerId = Object.keys(peerConnections)[0];  // Get the first peerId
+        const peerIds = Object.keys(peerConnections);
+        console.log("Ending the call for peerIds:", peerIds);
 
-        console.log("Ending the call for peerId:", peerId);
-
-        if (peerConnections[peerId]) {
-            peerConnections[peerId].close(); // Close the peer connection for the peerId
-            delete peerConnections[peerId];
-            console.log("Closed peer connection for peerId:", peerId);
-        }
+        // Close all peer connections
+        peerIds.forEach(peerId => {
+            if (peerConnections[peerId]) {
+                peerConnections[peerId].close(); // Close the peer connection
+                delete peerConnections[peerId];
+                console.log("Closed peer connection for peerId:", peerId);
+            }
+        });
 
         if (localStream) {
             localStream.getTracks().forEach(track => track.stop()); // Stop all tracks (microphone)
