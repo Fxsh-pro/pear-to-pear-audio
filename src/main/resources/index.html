@@ -15,17 +15,19 @@
 <button id="startCall">Start Call</button>
 <button id="muteButton" disabled>Mute</button>
 <button id="endCallButton" disabled>End Call</button>
-<audio id="remoteAudio" controls autoplay></audio>
+
+<!-- Remote audio streams for all participants -->
+<div id="remoteAudioContainer"></div>
 
 <script>
     const startCallButton = document.getElementById('startCall');
     const muteButton = document.getElementById('muteButton');
     const endCallButton = document.getElementById('endCallButton');
-    const remoteAudio = document.getElementById('remoteAudio');
     const roomCodeInput = document.getElementById('roomCode');
+    const remoteAudioContainer = document.getElementById('remoteAudioContainer');
 
     let localStream;
-    let peerConnection;
+    let peerConnections = {};  // Store peer connections by roomCode
     let signalingSocket;
     let isCallInProgress = false;
     let isMuted = false;
@@ -40,6 +42,7 @@
     // Setup WebSocket signaling and handle connection to a room
     function setupSignaling(roomCode) {
         signalingSocket = new WebSocket(signalingServerUrl + `?roomCode=${roomCode}`);
+        console.log(`Connecting to signaling server with roomCode: ${roomCode}`);
 
         signalingSocket.onopen = () => {
             console.log("WebSocket is connected.");
@@ -49,16 +52,29 @@
 
         signalingSocket.onmessage = async (message) => {
             const data = JSON.parse(message.data);
+            console.log("Received message from server:", data);
+
+            const roomCode = data.peerId || roomCodeInput.value;  // Ensure the correct roomCode is used
+            console.log("Using roomCode: " + roomCode);
 
             if (data.sdp) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                console.log("Received SDP:", data.sdp);
+                await peerConnections[roomCode].setRemoteDescription(new RTCSessionDescription(data.sdp));
+
                 if (data.sdp.type === 'offer') {
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));
+                    console.log("Creating answer to the offer.");
+                    const answer = await peerConnections[roomCode].createAnswer();
+                    await peerConnections[roomCode].setLocalDescription(answer);
+                    signalingSocket.send(JSON.stringify({
+                        sdp: peerConnections[roomCode].localDescription,
+                        peerId: roomCode
+                    }));
+                    console.log("Sent answer to the signaling server.");
                 }
             } else if (data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                console.log("Received ICE candidate:", data.candidate);
+                await peerConnections[roomCode].addIceCandidate(new RTCIceCandidate(data.candidate));
+                console.log("Added ICE candidate to peer connection.");
             }
         };
     }
@@ -73,35 +89,69 @@
         startCallButton.disabled = true;
         muteButton.disabled = false;
         endCallButton.disabled = false;
+        console.log("Call started, buttons updated.");
 
         try {
             // Get audio stream from the microphone
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log("Local media stream obtained.");
 
-            // Create RTCPeerConnection
-            peerConnection = new RTCPeerConnection(configuration);
+            // Add local stream to the call
+            localStream.getTracks().forEach(track => {
+                localStream.addTrack(track);
+            });
+            console.log("Local media tracks added.");
+
+            const roomCode = roomCodeInput.value;
+            if (!roomCode) {
+                alert("Please enter a room code.");
+                return;
+            }
+            console.log("Using room code:", roomCode);
+
+            // Create peer connection for the room
+            peerConnections[roomCode] = new RTCPeerConnection(configuration);
+            console.log("Created new RTCPeerConnection for room:", roomCode);
 
             // Add the local audio stream to the peer connection
             localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
+                peerConnections[roomCode].addTrack(track, localStream);
             });
+            console.log("Added local audio tracks to the peer connection.");
 
             // Set up ICE candidate handling
-            peerConnection.onicecandidate = (event) => {
+            peerConnections[roomCode].onicecandidate = (event) => {
                 if (event.candidate) {
-                    signalingSocket.send(JSON.stringify({ candidate: event.candidate }));
+                    signalingSocket.send(JSON.stringify({
+                        candidate: event.candidate,
+                        peerId: roomCode
+                    }));
+                    console.log("Sent ICE candidate to signaling server:", event.candidate);
                 }
             };
 
-            // Handle remote audio stream
-            peerConnection.ontrack = (event) => {
-                remoteAudio.srcObject = event.streams[0];
+            // Handle remote audio stream for other participants
+            peerConnections[roomCode].ontrack = (event) => {
+                const remoteStream = event.streams[0];
+                console.log("Received remote stream from another participant.");
+
+                const remoteAudio = document.createElement('audio');
+                remoteAudio.controls = true;
+                remoteAudio.autoplay = true;
+                remoteAudio.srcObject = remoteStream;
+                remoteAudioContainer.appendChild(remoteAudio);
+                console.log("Added remote audio element to the container.");
             };
 
-            // Create an SDP offer
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));
+            // Create SDP offer and send to the server
+            console.log("Creating SDP offer.");
+            const offer = await peerConnections[roomCode].createOffer();
+            await peerConnections[roomCode].setLocalDescription(offer);
+            signalingSocket.send(JSON.stringify({
+                sdp: peerConnections[roomCode].localDescription,
+                peerId: roomCode
+            }));
+            console.log("Sent SDP offer to the signaling server.");
         } catch (error) {
             console.error("Error starting the call:", error);
         }
@@ -116,36 +166,47 @@
 
             isMuted = !isMuted;
             muteButton.textContent = isMuted ? 'Unmute' : 'Mute'; // Update button text
+            console.log("Mute toggled:", isMuted);
         }
     }
 
     // Function to end the call
     function endCall() {
-        if (peerConnection) {
-            peerConnection.close(); // Close the RTCPeerConnection
-            peerConnection = null;
+        const roomCode = roomCodeInput.value;
+        console.log("Ending the call for room:", roomCode);
+
+        if (peerConnections[roomCode]) {
+            peerConnections[roomCode].close(); // Close the peer connection for the room
+            peerConnections[roomCode] = null;
+            console.log("Closed peer connection for room:", roomCode);
         }
 
         if (localStream) {
             localStream.getTracks().forEach(track => track.stop()); // Stop all tracks (microphone)
             localStream = null;
+            console.log("Stopped local media tracks.");
         }
 
         if (signalingSocket) {
             signalingSocket.close(); // Close WebSocket connection
             signalingSocket = null;
+            console.log("Closed signaling WebSocket.");
         }
 
         isCallInProgress = false;
         muteButton.disabled = true;
         endCallButton.disabled = true;
         startCallButton.disabled = false; // Enable the start call button again
-        remoteAudio.srcObject = null; // Stop playing the remote audio
+        console.log("Call ended, buttons reset.");
+        remoteAudioContainer.innerHTML = ''; // Clear the remote audio container
+        console.log("Cleared remote audio container.");
     }
 
     // Handle start call button click
     startCallButton.addEventListener('click', () => {
         const roomCode = roomCodeInput.value;
+        console.log("Start call button clicked, room code:", roomCode);
+
         if (!roomCode) {
             alert("Please enter a room code.");
             return;
