@@ -8,18 +8,23 @@
 <body>
 <h2>WebRTC Voice Call</h2>
 <button id="startCall">Start Call</button>
+<button id="muteButton" disabled>Mute</button>
+<button id="endCallButton" disabled>End Call</button> <!-- End Call Button -->
 <audio id="remoteAudio" controls autoplay></audio>
 
 <script>
     const startCallButton = document.getElementById('startCall');
+    const muteButton = document.getElementById('muteButton');
+    const endCallButton = document.getElementById('endCallButton'); // End Call Button reference
     const remoteAudio = document.getElementById('remoteAudio');
 
     let localStream;
     let peerConnection;
     let signalingSocket;
-    let isCallInProgress = false;  // Flag to track if a call is in progress
+    let isCallInProgress = false;
+    let isMuted = false;
 
-    const signalingServerUrl = 'ws://192.168.1.16:8080/signal';  // Change to your backend IP
+    const signalingServerUrl = 'ws://192.168.1.16:8080/signal'; // Adjust as necessary
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -52,8 +57,10 @@
             return;
         }
 
-        isCallInProgress = true;  // Set flag to indicate that the call is in progress
-        startCallButton.disabled = true;  // Optionally, disable the button to prevent multiple clicks
+        isCallInProgress = true;
+        startCallButton.disabled = true;
+        muteButton.disabled = false; // Enable the mute button once the call starts
+        endCallButton.disabled = false; // Enable the end call button
 
         try {
             // Get audio stream from the microphone
@@ -88,16 +95,40 @@
         }
     }
 
+    // Function to mute/unmute audio
+    function toggleMute() {
+        if (localStream) {
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !track.enabled; // Toggle the audio track
+            });
+
+            isMuted = !isMuted;
+            muteButton.textContent = isMuted ? 'Unmute' : 'Mute'; // Update button text
+        }
+    }
+
+    // Function to end the call
     function endCall() {
         if (peerConnection) {
-            peerConnection.close();
+            peerConnection.close(); // Close the RTCPeerConnection
             peerConnection = null;
-            signalingSocket.close();
+        }
+
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop()); // Stop all tracks (microphone)
+            localStream = null;
+        }
+
+        if (signalingSocket) {
+            signalingSocket.close(); // Close WebSocket connection
             signalingSocket = null;
         }
-        isCallInProgress = false;  // Reset the flag when the call ends
-        startCallButton.disabled = false;  // Enable the button again after the call ends
-        console.log("Call ended.");
+
+        isCallInProgress = false;
+        muteButton.disabled = true;
+        endCallButton.disabled = true;
+        startCallButton.disabled = false; // Enable the start call button again
+        remoteAudio.srcObject = null; // Stop playing the remote audio
     }
 
     startCallButton.addEventListener('click', () => {
@@ -106,141 +137,9 @@
             startCall();
         }
     });
+
+    muteButton.addEventListener('click', toggleMute); // Add event listener for mute button
+    endCallButton.addEventListener('click', endCall); // Add event listener for end call button
 </script>
 </body>
 </html>
-
-
-<!--<!DOCTYPE html>-->
-<!--<html lang="en">-->
-<!--<head>-->
-<!--    <meta charset="UTF-8">-->
-<!--    <meta name="viewport" content="width=device-width, initial-scale=1.0">-->
-<!--    <title>WebRTC Voice Call</title>-->
-<!--</head>-->
-<!--<body>-->
-<!--<h2>WebRTC Voice Call</h2>-->
-<!--<button id="startCall">Start Call</button>-->
-<!--<audio id="remoteAudio" controls autoplay></audio>-->
-
-<!--<script>-->
-<!--    const startCallButton = document.getElementById('startCall');-->
-<!--    const remoteAudio = document.getElementById('remoteAudio');-->
-
-<!--    let localStream;-->
-<!--    let peerConnection;-->
-<!--    const signalingServerUrl = 'ws://192.168.1.16:8080/signal';  // Change to the IP of the backend device-->
-<!--    let signalingSocket;-->
-
-<!--    // WebRTC configuration (STUN/TURN servers)-->
-<!--    const configuration = {-->
-<!--        iceServers: [-->
-<!--            { urls: 'stun:stun.l.google.com:19302' },  // Free STUN server-->
-<!--            // Optionally add TURN server if necessary-->
-<!--            // { urls: 'turn:yourturnserver.com', username: 'user', credential: 'pass' }-->
-<!--        ]-->
-<!--    };-->
-
-<!--    // WebSocket signaling logic-->
-<!--    function setupSignaling() {-->
-<!--        signalingSocket = new WebSocket(signalingServerUrl);-->
-
-<!--        signalingSocket.onopen = () => {-->
-<!--            console.log("WebSocket connection established");-->
-<!--        };-->
-
-<!--        signalingSocket.onmessage = async (message) => {-->
-<!--            const data = JSON.parse(message.data);-->
-
-<!--            if (data.sdp) {-->
-<!--                // Handle incoming SDP (offer/answer)-->
-<!--                await handleSDP(data.sdp);-->
-<!--            } else if (data.candidate) {-->
-<!--                // Handle incoming ICE candidates-->
-<!--                await handleICECandidate(data.candidate);-->
-<!--            }-->
-<!--        };-->
-
-<!--        signalingSocket.onclose = () => {-->
-<!--            console.log("WebSocket connection closed");-->
-<!--        };-->
-
-<!--        signalingSocket.onerror = (error) => {-->
-<!--            console.error("WebSocket error:", error);-->
-<!--        };-->
-<!--    }-->
-
-<!--    // Handle incoming SDP offer/answer-->
-<!--    async function handleSDP(sdp) {-->
-<!--        try {-->
-<!--            if (sdp.type === 'offer') {-->
-<!--                // Set remote offer and create an answer-->
-<!--                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));-->
-<!--                const answer = await peerConnection.createAnswer();-->
-<!--                await peerConnection.setLocalDescription(answer);-->
-<!--                signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));-->
-<!--            } else if (sdp.type === 'answer') {-->
-<!--                // Set remote answer-->
-<!--                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));-->
-<!--            }-->
-<!--        } catch (error) {-->
-<!--            console.error("Error handling SDP:", error);-->
-<!--        }-->
-<!--    }-->
-
-<!--    // Handle ICE candidates-->
-<!--    async function handleICECandidate(candidate) {-->
-<!--        try {-->
-<!--            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));-->
-<!--        } catch (error) {-->
-<!--            console.error("Error adding ICE candidate:", error);-->
-<!--        }-->
-<!--    }-->
-
-<!--    // Start the WebRTC call-->
-<!--    async function startCall() {-->
-<!--        try {-->
-<!--            // Get audio stream from the microphone-->
-<!--            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });-->
-<!--            console.log("Local stream obtained");-->
-
-<!--            // Create RTCPeerConnection-->
-<!--            peerConnection = new RTCPeerConnection(configuration);-->
-
-<!--            // Add the local audio stream to the peer connection-->
-<!--            localStream.getTracks().forEach(track => {-->
-<!--                peerConnection.addTrack(track, localStream);-->
-<!--            });-->
-
-<!--            // Set up ICE candidate handling-->
-<!--            peerConnection.onicecandidate = (event) => {-->
-<!--                if (event.candidate) {-->
-<!--                    signalingSocket.send(JSON.stringify({ candidate: event.candidate }));-->
-<!--                }-->
-<!--            };-->
-
-<!--            // Handle remote audio stream-->
-<!--            peerConnection.ontrack = (event) => {-->
-<!--                remoteAudio.srcObject = event.streams[0];-->
-<!--            };-->
-
-<!--            // Send an offer to the other peer-->
-<!--            const offer = await peerConnection.createOffer();-->
-<!--            await peerConnection.setLocalDescription(offer);-->
-<!--            signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));-->
-<!--            console.log("Offer sent to peer");-->
-
-<!--        } catch (error) {-->
-<!--            console.error("Error during call setup:", error);-->
-<!--        }-->
-<!--    }-->
-
-<!--    // Handle button click to start the call-->
-<!--    startCallButton.addEventListener('click', () => {-->
-<!--        console.log("Starting WebRTC call...");-->
-<!--        setupSignaling();  // Set up the signaling WebSocket connection-->
-<!--        startCall();       // Start the call-->
-<!--    });-->
-<!--</script>-->
-<!--</body>-->
-<!--</html>-->
