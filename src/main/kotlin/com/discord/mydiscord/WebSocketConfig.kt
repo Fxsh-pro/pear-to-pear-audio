@@ -11,6 +11,7 @@ class WebSocketConfig : WebSocketConfigurer {
 
     init {
         println("WebSocketConfig initialized")  // Debug log to verify if this is getting initialized
+        //    const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
     }
 
 
