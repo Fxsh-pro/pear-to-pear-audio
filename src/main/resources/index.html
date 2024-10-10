@@ -39,6 +39,50 @@
         ]
     };
 
+    async function handleSignalingMessage(data) {
+        const peerId = data.peerId;
+
+        if (data.sdp) {
+            if (!peerConnections[peerId]) {
+                console.log(`Creating new peer connection for peerId: ${peerId}`);
+                peerConnections[peerId] = new RTCPeerConnection(configuration);
+                setupPeerConnection(peerId);
+            }
+
+            const peerConnection = peerConnections[peerId];
+
+            try {
+                // Check the signaling state before setting remote description
+                if (peerConnection.signalingState === 'stable' && data.sdp.type === 'answer') {
+                    console.log("SDP answer ignored, already in stable state.");
+                    return;
+                }
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+
+                if (data.sdp.type === 'offer') {
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    signalingSocket.send(JSON.stringify({
+                        sdp: peerConnection.localDescription,
+                        peerId: peerId
+                    }));
+                }
+
+            } catch (error) {
+                console.error("Failed to set remote description:", error);
+            }
+        } else if (data.candidate) {
+            if (peerConnections[peerId]) {
+                try {
+                    await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
+                } catch (error) {
+                    console.error("Failed to add ICE candidate:", error);
+                }
+            }
+        }
+    }
+
     // Setup WebSocket signaling and handle connection to a room
     function setupSignaling(roomCode) {
         signalingSocket = new WebSocket(signalingServerUrl + `?roomCode=${roomCode}`);
@@ -53,41 +97,42 @@
         signalingSocket.onmessage = async (message) => {
             const data = JSON.parse(message.data);
             console.log("Received message from server:", data);
+            await handleSignalingMessage(data);
 
-            const peerId = data.peerId; // Correct peerId from the message
-            console.log("Using peerId: " + peerId);
-
-            // If we receive an SDP message, check if we have a peer connection for that peerId
-            if (data.sdp) {
-                if (!peerConnections[peerId]) {
-                    // If we don't have a connection for this peer, create it
-                    console.log(`Creating new peer connection for peerId: ${peerId}`);
-                    peerConnections[peerId] = new RTCPeerConnection(configuration);
-                    setupPeerConnection(peerId);
-                }
-
-                console.log("Received SDP:", data.sdp);
-                await peerConnections[peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
-
-                if (data.sdp.type === 'offer') {
-                    console.log("Creating answer to the offer.");
-                    const answer = await peerConnections[peerId].createAnswer();
-                    await peerConnections[peerId].setLocalDescription(answer);
-                    signalingSocket.send(JSON.stringify({
-                        sdp: peerConnections[peerId].localDescription,
-                        peerId: peerId
-                    }));
-                    console.log("Sent answer to the signaling server.");
-                }
-            } else if (data.candidate) {
-                if (peerConnections[peerId]) {
-                    console.log("Received ICE candidate:", data.candidate);
-                    await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
-                    console.log("Added ICE candidate to peer connection.");
-                } else {
-                    console.warn(`No peer connection found for peerId: ${peerId}`);
-                }
-            }
+            // const peerId = data.peerId; // Correct peerId from the message
+            // console.log("Using peerId: " + peerId);
+            //
+            // // If we receive an SDP message, check if we have a peer connection for that peerId
+            // if (data.sdp) {
+            //     if (!peerConnections[peerId]) {
+            //         // If we don't have a connection for this peer, create it
+            //         console.log(`Creating new peer connection for peerId: ${peerId}`);
+            //         peerConnections[peerId] = new RTCPeerConnection(configuration);
+            //         setupPeerConnection(peerId);
+            //     }
+            //
+            //     console.log("Received SDP:", data.sdp);
+            //     await peerConnections[peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
+            //
+            //     if (data.sdp.type === 'offer') {
+            //         console.log("Creating answer to the offer.");
+            //         const answer = await peerConnections[peerId].createAnswer();
+            //         await peerConnections[peerId].setLocalDescription(answer);
+            //         signalingSocket.send(JSON.stringify({
+            //             sdp: peerConnections[peerId].localDescription,
+            //             peerId: peerId
+            //         }));
+            //         console.log("Sent answer to the signaling server.");
+            //     }
+            // } else if (data.candidate) {
+            //     if (peerConnections[peerId]) {
+            //         console.log("Received ICE candidate:", data.candidate);
+            //         await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
+            //         console.log("Added ICE candidate to peer connection.");
+            //     } else {
+            //         console.warn(`No peer connection found for peerId: ${peerId}`);
+            //     }
+            // }
         };
     }
 
@@ -164,6 +209,7 @@
             const remoteStream = event.streams[0];
             console.log("Received remote stream from another participant.");
 
+            // Create a new audio element for each peer
             const remoteAudio = document.createElement('audio');
             remoteAudio.controls = true;
             remoteAudio.autoplay = true;
