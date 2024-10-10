@@ -25,7 +25,7 @@ ENV SRC_DIR=/usr/src/java-code
 
 COPY --from=builder ${SRC_DIR}/build/libs/*.jar ./app.jar
 
-COPY ./entrypoint.sh /usr/bin/
+#COPY ./entrypoint.sh /usr/bin/
 RUN apk add --update --no-cache netcat-openbsd
 
 ENTRYPOINT ["/usr/bin/entrypoint.sh"]
