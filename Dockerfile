@@ -1,6 +1,6 @@
 # CACHE
-#FROM docker.io/gradle:jdk17-alpine AS cache
-FROM gradle:jdk17 AS cache
+FROM docker.io/gradle:jdk17-alpine AS cache
+#FROM gradle:jdk17 AS cache
 # FROM --platform=linux/arm64 docker.io/gradle:jdk17-alpine AS cache
 # FROM --platform=linux/arm64 gradle:jdk17-alpine AS cache
 
@@ -15,6 +15,7 @@ RUN gradle clean build -i --stacktrace -x bootJar
 FROM gradle:jdk17  AS builder
 # FROM --platform=linux/arm64 docker.io/gradle:jdk17-alpine AS builder
 # FROM --platform=linux/arm64 gradle:jdk17-alpine AS cache
+FROM docker.io/gradle:jdk17-alpine AS builder
 
 ENV SRC_DIR=/usr/src/java-code
 ENV CACHE_HOME=/home/gradle/cache_home
@@ -26,10 +27,11 @@ WORKDIR ${SRC_DIR}/
 RUN gradle bootJar -i --stacktrace
 
 # RUNNER
-FROM --platform=linux/arm64 eclipse-temurin:17-jre AS runner
+#FROM --platform=linux/arm64 eclipse-temurin:17-jre AS runner
 # FROM gradle:jdk17
 # FROM --platform=linux/arm64 docker.io/openjdk:17-alpine
 # FROM --platform=linux/arm64 gradle:jdk17-alpine AS cache
+FROM docker.io/openjdk:17-alpine
 
 WORKDIR /usr/src/java-app
 ENV SRC_DIR=/usr/src/java-code
