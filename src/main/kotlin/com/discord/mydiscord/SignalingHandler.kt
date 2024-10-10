@@ -34,7 +34,7 @@ class SignalingHandler : TextWebSocketHandler() {
             // Send message to all peers in the room except sender
             roomSessions[roomCode]?.forEach { peer ->
                 if (peer.id != session.id) {
-                    peer.sendMessage(message)
+                    peer.sendMessage(message) // Forward message to other peers in the room
                 }
             }
         }
@@ -44,13 +44,13 @@ class SignalingHandler : TextWebSocketHandler() {
         val roomCode = session.uri?.query?.split("=")?.get(1)
         val peerId = session.id.toString()
 
-        roomSessions[roomCode]?.remove(session)
-        peerSessions.remove(peerId)
-
-        if (roomSessions[roomCode]?.isEmpty() == true) {
-            roomSessions.remove(roomCode) // Remove empty rooms
+        if (roomCode != null) {
+            roomSessions[roomCode]?.remove(session)
+            peerSessions.remove(peerId)
+            if (roomSessions[roomCode]?.isEmpty() == true) {
+                roomSessions.remove(roomCode) // Remove empty rooms
+            }
+            println("User with peerId $peerId left room $roomCode")
         }
-
-        println("User with peerId $peerId left room $roomCode")
     }
 }

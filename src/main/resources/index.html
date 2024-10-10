@@ -31,6 +31,7 @@
     let signalingSocket;
     let isCallInProgress = false;
     let isMuted = false;
+    let localPeerId; // New variable to store the local peerId
 
     const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
     const configuration = {
@@ -51,18 +52,35 @@
 
         signalingSocket.onmessage = async (message) => {
             const data = JSON.parse(message.data);
+            const peerId = data.peerId;
+
+            if (!peerId) {
+                console.error("No peerId in message");
+                return;
+            }
 
             if (data.sdp) {
-                console.log(peerConnections);
-                await peerConnections[data.peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
-                if (data.sdp.type === 'offer') {
-                    console.log("offer received")
-                    const answer = await peerConnections[data.peerId].createAnswer();
-                    await peerConnections[data.peerId].setLocalDescription(answer);
-                    signalingSocket.send(JSON.stringify({ sdp: peerConnections[data.peerId].localDescription, peerId: data.peerId }));
+                console.log("Received SDP from peer:", peerId);
+                const peerConnection = peerConnections[peerId];
+                if (peerConnection) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                    if (data.sdp.type === 'offer') {
+                        console.log("offer received from peer:", peerId);
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+                        signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription, peerId: peerId }));
+                    }
+                } else {
+                    console.error("No peer connection found for peerId:", peerId);
                 }
             } else if (data.candidate) {
-                await peerConnections[data.peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
+                console.log("Received ICE candidate from peer:", peerId);
+                const peerConnection = peerConnections[peerId];
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                } else {
+                    console.error("No peer connection found for peerId:", peerId);
+                }
             }
         };
     }
@@ -82,8 +100,10 @@
             // Get audio stream from the microphone
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+            // Generate a unique peerId for this user
+            localPeerId = Math.random().toString(36).substring(2);
+
             // Create a new peer connection for this user
-            const peerId = Math.random().toString(36).substring(2); // Generate a random ID for the peer
             const peerConnection = new RTCPeerConnection(configuration);
 
             // Add the local audio stream to the peer connection
@@ -94,7 +114,10 @@
             // Set up ICE candidate handling
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    signalingSocket.send(JSON.stringify({ candidate: event.candidate, peerId: peerId }));
+                    signalingSocket.send(JSON.stringify({
+                        candidate: event.candidate,
+                        peerId: localPeerId
+                    }));
                 }
             };
 
@@ -108,12 +131,15 @@
             };
 
             // Store peer connection
-            peerConnections[peerId] = peerConnection;
+            peerConnections[localPeerId] = peerConnection;
 
             // Create an SDP offer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription, peerId: peerId }));
+            signalingSocket.send(JSON.stringify({
+                sdp: peerConnection.localDescription,
+                peerId: localPeerId
+            }));
         } catch (error) {
             console.error("Error starting the call:", error);
         }
