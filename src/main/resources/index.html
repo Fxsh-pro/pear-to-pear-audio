@@ -61,26 +61,28 @@
 
             if (data.sdp) {
                 console.log("Received SDP from peer:", peerId);
-                const peerConnection = peerConnections[peerId];
-                if (peerConnection) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
-                    if (data.sdp.type === 'offer') {
-                        console.log("offer received from peer:", peerId);
-                        const answer = await peerConnection.createAnswer();
-                        await peerConnection.setLocalDescription(answer);
-                        signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription, peerId: peerId }));
-                    }
-                } else {
-                    console.error("No peer connection found for peerId:", peerId);
+                let peerConnection = peerConnections[peerId];
+                if (!peerConnection) {
+                    console.log("No peer connection found for peerId:", peerId, "Creating a new peer connection...");
+                    peerConnection = new RTCPeerConnection(configuration);
+                    peerConnections[peerId] = peerConnection;  // Store it
+                }
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                if (data.sdp.type === 'offer') {
+                    console.log("offer received from peer:", peerId);
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription, peerId: peerId }));
                 }
             } else if (data.candidate) {
                 console.log("Received ICE candidate from peer:", peerId);
-                const peerConnection = peerConnections[peerId];
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                } else {
+                let peerConnection = peerConnections[peerId];
+                if (!peerConnection) {
                     console.error("No peer connection found for peerId:", peerId);
+                    return;
                 }
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
             }
         };
     }
