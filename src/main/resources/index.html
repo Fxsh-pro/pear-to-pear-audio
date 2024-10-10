@@ -27,12 +27,13 @@
     const remoteAudioContainer = document.getElementById('remoteAudioContainer');
 
     let localStream;
-    let peerConnections = {};  // Store peer connections by roomCode
+    let peerConnections = {};  // Store peer connections by peerId
     let signalingSocket;
     let isCallInProgress = false;
     let isMuted = false;
 
-    const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
+    // const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
+    const signalingServerUrl = 'ws://127.0.0.1:8080/signal';
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -54,26 +55,26 @@
             const data = JSON.parse(message.data);
             console.log("Received message from server:", data);
 
-            const roomCode = data.peerId || roomCodeInput.value;  // Ensure the correct roomCode is used
-            console.log("Using roomCode: " + roomCode);
+            const peerId = data.peerId; // Correct peerId from the message
+            console.log("Using peerId: " + peerId);
 
             if (data.sdp) {
                 console.log("Received SDP:", data.sdp);
-                await peerConnections[roomCode].setRemoteDescription(new RTCSessionDescription(data.sdp));
+                await peerConnections[peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
 
                 if (data.sdp.type === 'offer') {
                     console.log("Creating answer to the offer.");
-                    const answer = await peerConnections[roomCode].createAnswer();
-                    await peerConnections[roomCode].setLocalDescription(answer);
+                    const answer = await peerConnections[peerId].createAnswer();
+                    await peerConnections[peerId].setLocalDescription(answer);
                     signalingSocket.send(JSON.stringify({
-                        sdp: peerConnections[roomCode].localDescription,
-                        peerId: roomCode
+                        sdp: peerConnections[peerId].localDescription,
+                        peerId: peerId
                     }));
                     console.log("Sent answer to the signaling server.");
                 }
             } else if (data.candidate) {
                 console.log("Received ICE candidate:", data.candidate);
-                await peerConnections[roomCode].addIceCandidate(new RTCIceCandidate(data.candidate));
+                await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
                 console.log("Added ICE candidate to peer connection.");
             }
         };
@@ -109,29 +110,30 @@
             }
             console.log("Using room code:", roomCode);
 
-            // Create peer connection for the room
-            peerConnections[roomCode] = new RTCPeerConnection(configuration);
-            console.log("Created new RTCPeerConnection for room:", roomCode);
+            // Create a peer connection for the current local peer
+            const peerId = Math.random().toString(36).substring(2);  // Generate a random peerId
+            peerConnections[peerId] = new RTCPeerConnection(configuration);
+            console.log("Created new RTCPeerConnection for peerId:", peerId);
 
             // Add the local audio stream to the peer connection
             localStream.getTracks().forEach(track => {
-                peerConnections[roomCode].addTrack(track, localStream);
+                peerConnections[peerId].addTrack(track, localStream);
             });
             console.log("Added local audio tracks to the peer connection.");
 
             // Set up ICE candidate handling
-            peerConnections[roomCode].onicecandidate = (event) => {
+            peerConnections[peerId].onicecandidate = (event) => {
                 if (event.candidate) {
                     signalingSocket.send(JSON.stringify({
                         candidate: event.candidate,
-                        peerId: roomCode
+                        peerId: peerId
                     }));
                     console.log("Sent ICE candidate to signaling server:", event.candidate);
                 }
             };
 
             // Handle remote audio stream for other participants
-            peerConnections[roomCode].ontrack = (event) => {
+            peerConnections[peerId].ontrack = (event) => {
                 const remoteStream = event.streams[0];
                 console.log("Received remote stream from another participant.");
 
@@ -145,11 +147,11 @@
 
             // Create SDP offer and send to the server
             console.log("Creating SDP offer.");
-            const offer = await peerConnections[roomCode].createOffer();
-            await peerConnections[roomCode].setLocalDescription(offer);
+            const offer = await peerConnections[peerId].createOffer();
+            await peerConnections[peerId].setLocalDescription(offer);
             signalingSocket.send(JSON.stringify({
-                sdp: peerConnections[roomCode].localDescription,
-                peerId: roomCode
+                sdp: peerConnections[peerId].localDescription,
+                peerId: peerId
             }));
             console.log("Sent SDP offer to the signaling server.");
         } catch (error) {
@@ -172,13 +174,14 @@
 
     // Function to end the call
     function endCall() {
-        const roomCode = roomCodeInput.value;
-        console.log("Ending the call for room:", roomCode);
+        const peerId = Object.keys(peerConnections)[0];  // Get the first peerId
 
-        if (peerConnections[roomCode]) {
-            peerConnections[roomCode].close(); // Close the peer connection for the room
-            peerConnections[roomCode] = null;
-            console.log("Closed peer connection for room:", roomCode);
+        console.log("Ending the call for peerId:", peerId);
+
+        if (peerConnections[peerId]) {
+            peerConnections[peerId].close(); // Close the peer connection for the peerId
+            delete peerConnections[peerId];
+            console.log("Closed peer connection for peerId:", peerId);
         }
 
         if (localStream) {
