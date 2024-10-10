@@ -7,6 +7,8 @@
 </head>
 <body>
 <h2>WebRTC Voice Call</h2>
+<label for="roomCode">Enter Room Code:</label>
+<input type="text" id="roomCode" placeholder="Enter code"><br><br>
 <button id="startCall">Start Call</button>
 <button id="muteButton" disabled>Mute</button>
 <button id="endCallButton" disabled>End Call</button> <!-- End Call Button -->
@@ -15,16 +17,19 @@
 <script>
     const startCallButton = document.getElementById('startCall');
     const muteButton = document.getElementById('muteButton');
-    const endCallButton = document.getElementById('endCallButton'); // End Call Button reference
+    const endCallButton = document.getElementById('endCallButton');
     const remoteAudio = document.getElementById('remoteAudio');
+    const roomCodeInput = document.getElementById('roomCode'); // Room Code input
 
     let localStream;
     let peerConnection;
     let signalingSocket;
     let isCallInProgress = false;
     let isMuted = false;
+    let roomCode; // Variable to hold the room code
 
-    const signalingServerUrl = 'ws://192.168.1.16:8080/signal'; // Adjust as necessary
+    // const signalingServerUrl = 'ws://51.250.76.218:8080/signal';
+    const signalingServerUrl = 'ws://127.0.0.1:8080/signal';
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -32,8 +37,8 @@
     };
 
     // Setup WebSocket signaling
-    function setupSignaling() {
-        signalingSocket = new WebSocket(signalingServerUrl);
+    function setupSignaling(roomCode) {
+        signalingSocket = new WebSocket(signalingServerUrl + `?roomCode=${roomCode}`);
 
         signalingSocket.onmessage = async (message) => {
             const data = JSON.parse(message.data);
@@ -57,10 +62,17 @@
             return;
         }
 
+        // Get room code entered by the user
+        roomCode = roomCodeInput.value;
+        if (!roomCode) {
+            alert("Please enter a room code.");
+            return;
+        }
+
         isCallInProgress = true;
         startCallButton.disabled = true;
-        muteButton.disabled = false; // Enable the mute button once the call starts
-        endCallButton.disabled = false; // Enable the end call button
+        muteButton.disabled = false;
+        endCallButton.disabled = false;
 
         try {
             // Get audio stream from the microphone
@@ -89,57 +101,50 @@
             // Create an SDP offer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
+            setupSignaling(roomCode);  // Initialize signaling with the room code
             signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));
         } catch (error) {
             console.error("Error starting the call:", error);
         }
     }
 
-    // Function to mute/unmute audio
     function toggleMute() {
         if (localStream) {
             localStream.getAudioTracks().forEach(track => {
-                track.enabled = !track.enabled; // Toggle the audio track
+                track.enabled = !track.enabled;
             });
 
             isMuted = !isMuted;
-            muteButton.textContent = isMuted ? 'Unmute' : 'Mute'; // Update button text
+            muteButton.textContent = isMuted ? 'Unmute' : 'Mute';
         }
     }
 
-    // Function to end the call
     function endCall() {
         if (peerConnection) {
-            peerConnection.close(); // Close the RTCPeerConnection
+            peerConnection.close();
             peerConnection = null;
         }
 
         if (localStream) {
-            localStream.getTracks().forEach(track => track.stop()); // Stop all tracks (microphone)
+            localStream.getTracks().forEach(track => track.stop());
             localStream = null;
         }
 
         if (signalingSocket) {
-            signalingSocket.close(); // Close WebSocket connection
+            signalingSocket.close();
             signalingSocket = null;
         }
 
         isCallInProgress = false;
         muteButton.disabled = true;
         endCallButton.disabled = true;
-        startCallButton.disabled = false; // Enable the start call button again
-        remoteAudio.srcObject = null; // Stop playing the remote audio
+        startCallButton.disabled = false;
+        remoteAudio.srcObject = null;
     }
 
-    startCallButton.addEventListener('click', () => {
-        if (!isCallInProgress) {
-            setupSignaling();
-            startCall();
-        }
-    });
-
-    muteButton.addEventListener('click', toggleMute); // Add event listener for mute button
-    endCallButton.addEventListener('click', endCall); // Add event listener for end call button
+    startCallButton.addEventListener('click', startCall);
+    muteButton.addEventListener('click', toggleMute);
+    endCallButton.addEventListener('click', endCall);
 </script>
 </body>
 </html>

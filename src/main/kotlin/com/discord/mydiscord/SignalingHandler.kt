@@ -5,31 +5,38 @@ import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketSession
 import org.springframework.web.socket.handler.TextWebSocketHandler
 import org.springframework.stereotype.Component
+import org.springframework.web.socket.CloseStatus
 
 @Component
 class SignalingHandler : TextWebSocketHandler() {
-    var LOG = LoggerFactory.getLogger(SignalingHandler::class.java)
 
-    private val sessions = mutableMapOf<String, WebSocketSession>()
+    private val roomSessions = mutableMapOf<String, MutableList<WebSocketSession>>() // Rooms map
 
     override fun afterConnectionEstablished(session: WebSocketSession) {
-        LOG.info("new session $session")
-        sessions[session.id] = session // Register a new session
+        val roomCode = session.uri?.query?.split("=")?.get(1)
+        if (roomCode != null) {
+            roomSessions.computeIfAbsent(roomCode) { mutableListOf() }.add(session)
+            println("User joined room $roomCode")
+        }
     }
 
     override fun handleTextMessage(session: WebSocketSession, message: TextMessage) {
-        LOG.info("handleTextMessage $message")
-        // Forward SDP/ICE messages to the other peer
-        sessions.values.forEach { peer ->
-            if (peer.id != session.id) {
-                peer.sendMessage(message) // Send message to the other peer
+        val roomCode = session.uri?.query?.split("=")?.get(1)
+        if (roomCode != null) {
+            roomSessions[roomCode]?.forEach { peer ->
+                if (peer.id != session.id) {
+                    peer.sendMessage(message) // Forward message to other peers in the room
+                }
             }
         }
     }
 
-    override fun afterConnectionClosed(session: WebSocketSession, status: org.springframework.web.socket.CloseStatus) {
-        LOG.info("afterConnectionClosed $status")
-
-        sessions.remove(session.id) // Remove session on disconnect
+    override fun afterConnectionClosed(session: WebSocketSession, status: CloseStatus) {
+        val roomCode = session.uri?.query?.split("=")?.get(1)
+        roomSessions[roomCode]?.remove(session)
+        if (roomSessions[roomCode]?.isEmpty() == true) {
+            roomSessions.remove(roomCode) // Remove empty rooms
+        }
+        println("User left room $roomCode")
     }
 }
