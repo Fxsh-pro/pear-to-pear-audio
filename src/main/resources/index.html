@@ -15,17 +15,19 @@
 <button id="startCall">Start Call</button>
 <button id="muteButton" disabled>Mute</button>
 <button id="endCallButton" disabled>End Call</button>
-<audio id="remoteAudio" controls autoplay></audio>
+
+<!-- Container for remote audio -->
+<div id="remoteAudioContainer"></div>
 
 <script>
     const startCallButton = document.getElementById('startCall');
     const muteButton = document.getElementById('muteButton');
     const endCallButton = document.getElementById('endCallButton');
-    const remoteAudio = document.getElementById('remoteAudio');
+    const remoteAudioContainer = document.getElementById('remoteAudioContainer');
     const roomCodeInput = document.getElementById('roomCode');
 
     let localStream;
-    let peerConnection;
+    let peerConnections = {}; // store peer connections for each remote peer
     let signalingSocket;
     let isCallInProgress = false;
     let isMuted = false;
@@ -51,14 +53,16 @@
             const data = JSON.parse(message.data);
 
             if (data.sdp) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                console.log(peerConnections);
+                await peerConnections[data.peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
                 if (data.sdp.type === 'offer') {
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));
+                    console.log("offer received")
+                    const answer = await peerConnections[data.peerId].createAnswer();
+                    await peerConnections[data.peerId].setLocalDescription(answer);
+                    signalingSocket.send(JSON.stringify({ sdp: peerConnections[data.peerId].localDescription, peerId: data.peerId }));
                 }
             } else if (data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                await peerConnections[data.peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
             }
         };
     }
@@ -78,8 +82,9 @@
             // Get audio stream from the microphone
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // Create RTCPeerConnection
-            peerConnection = new RTCPeerConnection(configuration);
+            // Create a new peer connection for this user
+            const peerId = Math.random().toString(36).substring(2); // Generate a random ID for the peer
+            const peerConnection = new RTCPeerConnection(configuration);
 
             // Add the local audio stream to the peer connection
             localStream.getTracks().forEach(track => {
@@ -89,19 +94,26 @@
             // Set up ICE candidate handling
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    signalingSocket.send(JSON.stringify({ candidate: event.candidate }));
+                    signalingSocket.send(JSON.stringify({ candidate: event.candidate, peerId: peerId }));
                 }
             };
 
             // Handle remote audio stream
             peerConnection.ontrack = (event) => {
-                remoteAudio.srcObject = event.streams[0];
+                const remoteAudioElement = document.createElement('audio');
+                remoteAudioElement.controls = true;
+                remoteAudioElement.autoplay = true;
+                remoteAudioElement.srcObject = event.streams[0];
+                remoteAudioContainer.appendChild(remoteAudioElement);
             };
+
+            // Store peer connection
+            peerConnections[peerId] = peerConnection;
 
             // Create an SDP offer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription }));
+            signalingSocket.send(JSON.stringify({ sdp: peerConnection.localDescription, peerId: peerId }));
         } catch (error) {
             console.error("Error starting the call:", error);
         }
@@ -121,9 +133,10 @@
 
     // Function to end the call
     function endCall() {
-        if (peerConnection) {
-            peerConnection.close(); // Close the RTCPeerConnection
-            peerConnection = null;
+        if (Object.keys(peerConnections).length > 0) {
+            Object.values(peerConnections).forEach(pc => {
+                pc.close();
+            });
         }
 
         if (localStream) {
@@ -140,7 +153,7 @@
         muteButton.disabled = true;
         endCallButton.disabled = true;
         startCallButton.disabled = false; // Enable the start call button again
-        remoteAudio.srcObject = null; // Stop playing the remote audio
+        remoteAudioContainer.innerHTML = ''; // Clear all remote audio streams
     }
 
     // Handle start call button click
