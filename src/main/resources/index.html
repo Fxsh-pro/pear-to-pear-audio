@@ -1,288 +1,123 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Voice Call</title>
+    <meta charset="utf-8">
+    <title>WebRTC Video Chat</title>
+    <link href="http://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
-<h2>WebRTC Voice Call</h2>
-
-<!-- Room Code Input -->
-<label for="roomCode">Enter Room Code:</label>
-<input type="text" id="roomCode" placeholder="Enter a room code"><br><br>
-
-<button id="startCall">Start Call</button>
-<button id="muteButton" disabled>Mute</button>
-<button id="endCallButton" disabled>End Call</button>
-
-<!-- Remote audio streams for all participants -->
-<div id="remoteAudioContainer"></div>
-
+<div class="container">
+    <div class="row mb-3 mt-3 justify-content-md-center">
+        <div id="user-name"></div>
+        <button id="call" class="btn btn-primary col-1">Call!</button>
+        <button id="hangup" class="col-1 btn btn-primary">Hangup</button>
+        <div id="answer" class="col"></div>
+    </div>
+    <div id="videos">
+        <div id="video-wrapper">
+            <div id="waiting" class="btn btn-warning">Waiting for answer...</div>
+            <video class="video-player" id="local-video" autoplay playsinline controls></video>
+        </div>
+        <video class="video-player" id="remote-video" autoplay playsinline controls></video>
+    </div>
+</div>
 <script>
-    const startCallButton = document.getElementById('startCall');
-    const muteButton = document.getElementById('muteButton');
-    const endCallButton = document.getElementById('endCallButton');
-    const roomCodeInput = document.getElementById('roomCode');
-    const remoteAudioContainer = document.getElementById('remoteAudioContainer');
+    const userName = "Rob-" + Math.floor(Math.random() * 100000);
+    document.querySelector('#user-name').innerHTML = userName;
+
+    const socket = new WebSocket("ws://localhost:8080/signaling");
+
+    socket.onopen = () => {
+        console.log("WebSocket connection established.");
+    };
+
+    socket.onmessage = (message) => {
+        const data = JSON.parse(message.data);
+        if (data.type === 'offer') {
+            answerOffer(data);
+        } else if (data.type === 'answer') {
+            addAnswer(data);
+        } else if (data.type === 'iceCandidate') {
+            addNewIceCandidate(data.candidate);
+        }
+    };
+
+    const localVideoEl = document.querySelector('#local-video');
+    const remoteVideoEl = document.querySelector('#remote-video');
 
     let localStream;
-    let peerConnections = {};  // Store peer connections by peerId
-    let signalingSocket;
-    let isCallInProgress = false;
-    let isMuted = false;
+    let remoteStream;
+    let peerConnection;
 
-    const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
-    const configuration = {
+    const peerConfiguration = {
         iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
+            {
+                urls: [
+                    'stun:stun.l.google.com:19302',
+                    'stun:stun1.l.google.com:19302'
+                ]
+            }
         ]
     };
 
-    async function handleSignalingMessage(data) {
-        const peerId = data.peerId;
+    const call = async () => {
+        await fetchUserMedia();
+        await createPeerConnection();
 
-        if (data.sdp) {
-            if (!peerConnections[peerId]) {
-                console.log(`Creating new peer connection for peerId: ${peerId}`);
-                peerConnections[peerId] = new RTCPeerConnection(configuration);
-                setupPeerConnection(peerId);
-            }
+        const offer = await peerConnection.createOffer();
+        peerConnection.setLocalDescription(offer);
+        socket.send(JSON.stringify({ type: 'offer', offer: offer, userName }));
+    };
 
-            const peerConnection = peerConnections[peerId];
+    const answerOffer = async (offerObj) => {
+        await fetchUserMedia();
+        await createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerObj.offer));
+        const answer = await peerConnection.createAnswer();
+        peerConnection.setLocalDescription(answer);
+        socket.send(JSON.stringify({ type: 'answer', answer: answer, userName }));
+    };
 
-            try {
-                // Check the signaling state before setting remote description
-                if (peerConnection.signalingState === 'stable' && data.sdp.type === 'answer') {
-                    console.log("SDP answer ignored, already in stable state.");
-                    return;
-                }
+    const addAnswer = async (answerObj) => {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answerObj.answer));
+    };
 
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    const fetchUserMedia = () => {
+        return navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                localVideoEl.srcObject = stream;
+                localStream = stream;
+            })
+            .catch(err => console.log(err));
+    };
 
-                if (data.sdp.type === 'offer') {
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    signalingSocket.send(JSON.stringify({
-                        sdp: peerConnection.localDescription,
-                        peerId: peerId
-                    }));
-                }
+    const createPeerConnection = () => {
+        peerConnection = new RTCPeerConnection(peerConfiguration);
+        remoteStream = new MediaStream();
+        remoteVideoEl.srcObject = remoteStream;
 
-            } catch (error) {
-                console.error("Failed to set remote description:", error);
-            }
-        } else if (data.candidate) {
-            if (peerConnections[peerId]) {
-                try {
-                    await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
-                } catch (error) {
-                    console.error("Failed to add ICE candidate:", error);
-                }
-            }
-        }
-    }
-
-    // Setup WebSocket signaling and handle connection to a room
-    function setupSignaling(roomCode) {
-        signalingSocket = new WebSocket(signalingServerUrl + `?roomCode=${roomCode}`);
-        console.log(`Connecting to signaling server with roomCode: ${roomCode}`);
-
-        signalingSocket.onopen = () => {
-            console.log("WebSocket is connected.");
-            // Start the call only after WebSocket is connected
-            startCall();
-        };
-
-        signalingSocket.onmessage = async (message) => {
-            const data = JSON.parse(message.data);
-            console.log("Received message from server:", data);
-            await handleSignalingMessage(data);
-
-            // const peerId = data.peerId; // Correct peerId from the message
-            // console.log("Using peerId: " + peerId);
-            //
-            // // If we receive an SDP message, check if we have a peer connection for that peerId
-            // if (data.sdp) {
-            //     if (!peerConnections[peerId]) {
-            //         // If we don't have a connection for this peer, create it
-            //         console.log(`Creating new peer connection for peerId: ${peerId}`);
-            //         peerConnections[peerId] = new RTCPeerConnection(configuration);
-            //         setupPeerConnection(peerId);
-            //     }
-            //
-            //     console.log("Received SDP:", data.sdp);
-            //     await peerConnections[peerId].setRemoteDescription(new RTCSessionDescription(data.sdp));
-            //
-            //     if (data.sdp.type === 'offer') {
-            //         console.log("Creating answer to the offer.");
-            //         const answer = await peerConnections[peerId].createAnswer();
-            //         await peerConnections[peerId].setLocalDescription(answer);
-            //         signalingSocket.send(JSON.stringify({
-            //             sdp: peerConnections[peerId].localDescription,
-            //             peerId: peerId
-            //         }));
-            //         console.log("Sent answer to the signaling server.");
-            //     }
-            // } else if (data.candidate) {
-            //     if (peerConnections[peerId]) {
-            //         console.log("Received ICE candidate:", data.candidate);
-            //         await peerConnections[peerId].addIceCandidate(new RTCIceCandidate(data.candidate));
-            //         console.log("Added ICE candidate to peer connection.");
-            //     } else {
-            //         console.warn(`No peer connection found for peerId: ${peerId}`);
-            //     }
-            // }
-        };
-    }
-
-    async function startCall() {
-        if (isCallInProgress) {
-            console.log("Call is already in progress.");
-            return;
-        }
-
-        isCallInProgress = true;
-        startCallButton.disabled = true;
-        muteButton.disabled = false;
-        endCallButton.disabled = false;
-        console.log("Call started, buttons updated.");
-
-        try {
-            // Get audio stream from the microphone
-            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            console.log("Local media stream obtained.");
-
-            // Add local stream to the call
-            localStream.getTracks().forEach(track => {
-                localStream.addTrack(track);
-            });
-            console.log("Local media tracks added.");
-
-            const roomCode = roomCodeInput.value;
-            if (!roomCode) {
-                alert("Please enter a room code.");
-                return;
-            }
-            console.log("Using room code:", roomCode);
-
-            // Create a peer connection for the current local peer
-            const peerId = Math.random().toString(36).substring(2);  // Generate a random peerId
-            peerConnections[peerId] = new RTCPeerConnection(configuration);
-            setupPeerConnection(peerId);
-
-            // Add the local audio stream to the peer connection
-            localStream.getTracks().forEach(track => {
-                peerConnections[peerId].addTrack(track, localStream);
-            });
-            console.log("Added local audio tracks to the peer connection.");
-
-            // Create SDP offer and send to the server
-            console.log("Creating SDP offer.");
-            const offer = await peerConnections[peerId].createOffer();
-            await peerConnections[peerId].setLocalDescription(offer);
-            signalingSocket.send(JSON.stringify({
-                sdp: peerConnections[peerId].localDescription,
-                peerId: peerId
-            }));
-            console.log("Sent SDP offer to the signaling server.");
-        } catch (error) {
-            console.error("Error starting the call:", error);
-        }
-    }
-
-    // Function to handle new peer connection
-    function setupPeerConnection(peerId) {
-        // Add ICE candidate handling
-        peerConnections[peerId].onicecandidate = (event) => {
-            if (event.candidate) {
-                signalingSocket.send(JSON.stringify({
-                    candidate: event.candidate,
-                    peerId: peerId
-                }));
-                console.log("Sent ICE candidate to signaling server:", event.candidate);
-            }
-        };
-
-        // Handle remote audio stream for other participants
-        peerConnections[peerId].ontrack = (event) => {
-            const remoteStream = event.streams[0];
-            console.log("Received remote stream from another participant.");
-
-            // Create a new audio element for each peer
-            const remoteAudio = document.createElement('audio');
-            remoteAudio.controls = true;
-            remoteAudio.autoplay = true;
-            remoteAudio.srcObject = remoteStream;
-            remoteAudioContainer.appendChild(remoteAudio);
-            console.log("Added remote audio element to the container.");
-        };
-    }
-
-    // Function to mute/unmute audio
-    function toggleMute() {
-        if (localStream) {
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = !track.enabled; // Toggle the audio track
-            });
-
-            isMuted = !isMuted;
-            muteButton.textContent = isMuted ? 'Unmute' : 'Mute'; // Update button text
-            console.log("Mute toggled:", isMuted);
-        }
-    }
-
-    // Function to end the call
-    function endCall() {
-        const peerIds = Object.keys(peerConnections);
-        console.log("Ending the call for peerIds:", peerIds);
-
-        // Close all peer connections
-        peerIds.forEach(peerId => {
-            if (peerConnections[peerId]) {
-                peerConnections[peerId].close(); // Close the peer connection
-                delete peerConnections[peerId];
-                console.log("Closed peer connection for peerId:", peerId);
-            }
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
         });
 
-        if (localStream) {
-            localStream.getTracks().forEach(track => track.stop()); // Stop all tracks (microphone)
-            localStream = null;
-            console.log("Stopped local media tracks.");
-        }
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                socket.send(JSON.stringify({ type: 'iceCandidate', candidate: event.candidate, userName }));
+            }
+        };
 
-        if (signalingSocket) {
-            signalingSocket.close(); // Close WebSocket connection
-            signalingSocket = null;
-            console.log("Closed signaling WebSocket.");
-        }
+        peerConnection.ontrack = event => {
+            event.streams[0].getTracks().forEach(track => {
+                remoteStream.addTrack(track);
+            });
+        };
+    };
 
-        isCallInProgress = false;
-        muteButton.disabled = true;
-        endCallButton.disabled = true;
-        startCallButton.disabled = false; // Enable the start call button again
-        console.log("Call ended, buttons reset.");
-        remoteAudioContainer.innerHTML = ''; // Clear the remote audio container
-        console.log("Cleared remote audio container.");
-    }
+    const addNewIceCandidate = (iceCandidate) => {
+        peerConnection.addIceCandidate(new RTCIceCandidate(iceCandidate));
+    };
 
-    // Handle start call button click
-    startCallButton.addEventListener('click', () => {
-        const roomCode = roomCodeInput.value;
-        console.log("Start call button clicked, room code:", roomCode);
-
-        if (!roomCode) {
-            alert("Please enter a room code.");
-            return;
-        }
-        if (!isCallInProgress) {
-            setupSignaling(roomCode); // Initialize WebSocket connection with the room code
-        }
-    });
-
-    muteButton.addEventListener('click', toggleMute); // Mute button event listener
-    endCallButton.addEventListener('click', endCall); // End call button event listener
+    document.querySelector('#call').addEventListener('click', call);
 </script>
 </body>
 </html>

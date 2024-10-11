@@ -7,16 +7,8 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 @Configuration
 @EnableWebSocket
-class WebSocketConfig : WebSocketConfigurer {
-
-    init {
-        println("WebSocketConfig initialized")  // Debug log to verify if this is getting initialized
-        //    const signalingServerUrl = 'ws://192.168.1.31:8080/signal';
-    }
-
-
+class WebSocketConfig(val signalingHandler: SignalingHandler) : WebSocketConfigurer {
     override fun registerWebSocketHandlers(registry: WebSocketHandlerRegistry) {
-        registry.addHandler(SignalingHandler(), "/signal")
-            .setAllowedOrigins("*")
+        registry.addHandler(signalingHandler, "/signaling").setAllowedOrigins("*")
     }
 }
